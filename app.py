@@ -21,25 +21,28 @@ def _is_logged_in():
 
 
 def _try_login():
-    """Attempt to log in the user silently. Sets session state if logged in."""
+    """Attempt to log in the user silently, supporting both st.user and st.experimental_user."""
     if st.session_state.get("user_id"):
         return
-    
-    try:
-        if st.user.is_logged_in:
-            email = st.user.email
-            name = st.user.name or email
-            user_id = get_or_create_google_user(email, name)
-            st.session_state.user_id = user_id
-            st.session_state.username = name
-    except Exception as e:
-        # Use st.experimental_user (standard for Community Cloud auth)
-        if st.experimental_user.is_logged_in:
-            email = st.experimental_user.email
-            name = st.experimental_user.name or email
-            user_id = get_or_create_google_user(email, name)
-            st.session_state.user_id = user_id
-            st.session_state.username = name
+
+    # 1. Identify which authentication object is available
+    # We check st.user first (modern), then fallback to st.experimental_user
+    user_info = getattr(st, "user", getattr(st, "experimental_user", None))
+
+    # 2. Safely check if the object exists and has the 'is_logged_in' attribute
+    if user_info and hasattr(user_info, "is_logged_in"):
+        try:
+            if user_info.is_logged_in:
+                email = user_info.email
+                # Use name if available, otherwise fallback to email
+                name = getattr(user_info, "name", email) or email
+                
+                user_id = get_or_create_google_user(email, name)
+                st.session_state.user_id = user_id
+                st.session_state.username = name
+        except Exception as e:
+            # This catches cases where the attribute exists but auth isn't fully configured
+            st.warning(f"Autenticación disponible pero no configurada: {e}")
 
 
 def _difficulty_score(q, question_stats):
