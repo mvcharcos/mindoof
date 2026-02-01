@@ -1005,12 +1005,17 @@ def show_test_config():
                         for lk in links
                     ]
                 export_questions.append(eq)
+            export_collabs = []
+            for c in get_collaborators(test_id):
+                export_collabs.append({"email": c["email"], "role": c["role"]})
             export_data = {
                 "title": test["title"],
                 "description": test.get("description", ""),
                 "author": test.get("author", ""),
                 "language": test.get("language", ""),
+                "visibility": test.get("visibility", "public"),
                 "materials": export_materials,
+                "collaborators": export_collabs,
                 "questions": export_questions,
             }
             st.download_button(
@@ -1329,7 +1334,7 @@ def show_dashboard():
                             correct = q["options"][q["answer_index"]]
                             st.success(t("correct_answer", answer=correct))
                             st.info(t("explanation", text=q['explanation']))
-                            _render_material_refs(q["db_id"], st.session_state.current_test_id)
+                            _render_material_refs(q["db_id"], st.session_state.get("current_test_id"))
                             st.write("---")
                     else:
                         st.write(t("no_wrong_details"))
@@ -1434,9 +1439,45 @@ def show_create_test():
                 import json
                 try:
                     data = json.loads(uploaded_json.read())
-                    questions_list = data if isinstance(data, list) else data.get("questions", [])
+                    if isinstance(data, dict):
+                        # Import metadata if not manually set
+                        if not title.strip() and data.get("title"):
+                            update_test(test_id, data["title"], data.get("description", ""),
+                                        data.get("author", ""), data.get("language", ""),
+                                        data.get("visibility", "public"))
+                        elif data.get("visibility") or data.get("language"):
+                            update_test(test_id, title.strip(), description.strip(),
+                                        st.session_state.get("username", ""),
+                                        data.get("language", language),
+                                        data.get("visibility", "public"))
+
+                        # Import materials
+                        mat_id_map = {}
+                        for mat in data.get("materials", []):
+                            old_id = mat.get("id")
+                            new_mat_id = add_test_material(
+                                test_id, mat.get("material_type", "url"),
+                                mat.get("title", ""), mat.get("url", ""),
+                                pause_times=mat.get("pause_times", ""),
+                                transcript=mat.get("transcript", ""),
+                            )
+                            if old_id is not None:
+                                mat_id_map[old_id] = new_mat_id
+
+                        # Import collaborators
+                        for collab in data.get("collaborators", []):
+                            email = collab.get("email", "").strip()
+                            role = collab.get("role", "guest")
+                            if email:
+                                add_collaborator(test_id, email, role)
+
+                        questions_list = data.get("questions", [])
+                    else:
+                        questions_list = data
+                        mat_id_map = {}
+
                     for i, q in enumerate(questions_list, 1):
-                        add_question(
+                        q_id = add_question(
                             test_id, i,
                             q.get("tag", "general"),
                             q["question"],
@@ -1445,6 +1486,16 @@ def show_create_test():
                             q.get("explanation", ""),
                             source="json_import",
                         )
+                        # Import material references
+                        refs = q.get("material_refs", [])
+                        if refs and mat_id_map:
+                            links = []
+                            for ref in refs:
+                                new_mid = mat_id_map.get(ref.get("material_id"))
+                                if new_mid:
+                                    links.append({"material_id": new_mid, "context": ref.get("context", "")})
+                            if links:
+                                set_question_material_links(q_id, links)
                 except (json.JSONDecodeError, KeyError) as e:
                     st.error(t("json_import_error", e=e))
 

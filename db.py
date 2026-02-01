@@ -263,17 +263,53 @@ def _import_json_file(conn, file_path):
         author = data.get("author", "")
         questions_data = data.get("questions", [])
 
+    language = data.get("language", "") if isinstance(data, dict) else ""
+    visibility = data.get("visibility", "public") if isinstance(data, dict) else "public"
+
     cursor = conn.execute(
-        "INSERT INTO tests (owner_id, title, description, author, source_file, is_public) VALUES (?, ?, ?, ?, ?, 1)",
-        (None, title, description, author, file_path.stem),
+        "INSERT INTO tests (owner_id, title, description, author, source_file, is_public, language, visibility) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+        (None, title, description, author, file_path.stem, language, visibility),
     )
     test_id = cursor.lastrowid
 
+    # Import materials
+    mat_id_map = {}
+    materials_data = data.get("materials", []) if isinstance(data, dict) else []
+    for mat in materials_data:
+        old_id = mat.get("id")
+        mat_cursor = conn.execute(
+            "INSERT INTO test_materials (test_id, material_type, title, url, pause_times, transcript) VALUES (?, ?, ?, ?, ?, ?)",
+            (test_id, mat.get("material_type", "url"), mat.get("title", ""), mat.get("url", ""),
+             mat.get("pause_times", ""), mat.get("transcript", "")),
+        )
+        if old_id is not None:
+            mat_id_map[old_id] = mat_cursor.lastrowid
+
+    # Import collaborators
+    collabs_data = data.get("collaborators", []) if isinstance(data, dict) else []
+    for collab in collabs_data:
+        email = collab.get("email", "").strip()
+        role = collab.get("role", "guest")
+        if email and role in ("student", "guest", "reviewer", "admin"):
+            conn.execute(
+                "INSERT OR IGNORE INTO test_collaborators (test_id, user_email, role) VALUES (?, ?, ?)",
+                (test_id, email, role),
+            )
+
     for q in questions_data:
-        conn.execute(
+        q_cursor = conn.execute(
             "INSERT INTO questions (test_id, question_num, tag, question, options, answer_index, explanation) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (test_id, q["id"], q["tag"], q["question"], json.dumps(q["options"], ensure_ascii=False), q["answer_index"], q.get("explanation", "")),
         )
+        # Import material references
+        for ref in q.get("material_refs", []):
+            new_mid = mat_id_map.get(ref.get("material_id"))
+            if new_mid:
+                conn.execute(
+                    "INSERT INTO question_materials (question_id, material_id, context) VALUES (?, ?, ?)",
+                    (q_cursor.lastrowid, new_mid, ref.get("context", "")),
+                )
+
     conn.commit()
     return test_id
 
